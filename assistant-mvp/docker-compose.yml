@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  assistant-mvp:
+    build: .
+    container_name: assistant-mvp
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      # Mount the current directory so that scripts can read resources like image.jpg if needed
+      - .:/app

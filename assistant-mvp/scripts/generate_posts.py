@@ -1,5 +1,7 @@
 import os
 import json
+import uuid
+import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 from app.utils import logger
@@ -57,6 +59,7 @@ def run_content_agent():
             continue
             
         name = get_text("Name", "Không tên")
+        niche = get_text("Niche", "Bán lẻ / Dịch vụ")
         short_desc = get_text("Short Description")
         target_cust = get_text("Target Customer")
         pain = get_text("Pain Point")
@@ -66,8 +69,8 @@ def run_content_agent():
         
         # Prepare Prompt
         prompt = template.format(
-            num_posts=3,
-            niche="Bán lẻ / Dịch vụ", # Có thể read từ Notion
+            num_posts=1,
+            niche=niche,
             name=name,
             short_description=short_desc,
             target_customer=target_cust,
@@ -101,7 +104,8 @@ def run_content_agent():
                 
             logger.info(f"Generated {len(posts_data)} posts. Uploading to Notion...")
             
-            for p in posts_data:
+
+            for idx, p in enumerate(posts_data):
                 topic = p.get("topic", "No Topic")
                 content = p.get("content", "No Content")
                 
@@ -119,12 +123,21 @@ def run_content_agent():
                     })
                 
                 # Insert vào Posts Notion
+                unique_post_id = f"POST-{uuid.uuid4().hex[:8].upper()}"
+                
+                # Cố định mốc 9h sáng ngày mai (giờ server), cộng thêm idx để nếu có nhiều bài thì các bài cách nhau 1 tiếng
+                tomorrow = datetime.datetime.now().astimezone() + datetime.timedelta(days=1)
+                safe_hour = min(9 + idx*3, 23)
+                scheduled_time_iso = tomorrow.replace(hour=safe_hour, minute=0, second=0, microsecond=0).isoformat()
+                
                 post_payload = {
+                    "Post ID": {"rich_text": [{"text": {"content": unique_post_id}}]},
+                    "Scheduled Date": {"date": {"start": scheduled_time_iso}},
                     "Name": {"title": [{ "text": { "content": topic } }]},
                     "Topic": {"rich_text": [{"text": {"content": topic}}]},
                     "Product ID": {"rich_text": [{"text": {"content": prod['id']}}]},
                     "Status": {"status": {"name": "Draft"}},
-                    "Approved": {"checkbox": False}
+                    "Channel": {"select": {"name": "bluesky"}}
                 }
                 insert_post(posts_db, post_payload, children)
                 

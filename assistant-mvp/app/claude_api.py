@@ -1,5 +1,6 @@
 import os
 import requests
+import time
 from dotenv import load_dotenv
 from app.utils import logger
 
@@ -81,14 +82,23 @@ def generate_text_claude(prompt: str, system_prompt: str = "") -> str:
     """
     Gửi request lên LLM provider (Claude direct hoặc OpenRouter).
     Chọn provider qua biến LLM_PROVIDER trong .env.
+    Có cơ chế tự động retry 3 lần nếu có lỗi.
     """
     messages = [{"role": "user", "content": prompt}]
+    max_retries = 3
+    base_delay = 5 # seconds
 
-    try:
-        if LLM_PROVIDER == "openrouter":
-            return _call_openrouter(messages, system_prompt, OPENROUTER_MODEL)
-        else:
-            return _call_claude_direct(messages, system_prompt, CLAUDE_MODEL)
-    except Exception as e:
-        logger.error(f"Error calling {LLM_PROVIDER} API: {e}")
-        return ""
+    for attempt in range(max_retries):
+        try:
+            if LLM_PROVIDER == "openrouter":
+                return _call_openrouter(messages, system_prompt, OPENROUTER_MODEL)
+            else:
+                return _call_claude_direct(messages, system_prompt, CLAUDE_MODEL)
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"Error calling {LLM_PROVIDER} API: {e}. Retrying in {delay} seconds... (Attempt {attempt + 1}/{max_retries})")
+                time.sleep(delay)
+            else:
+                logger.error(f"Error calling {LLM_PROVIDER} API after {max_retries} attempts: {e}")
+                return ""

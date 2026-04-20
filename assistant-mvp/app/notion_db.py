@@ -19,7 +19,6 @@ def fetch_products(database_id: str):
     """
     url = f"https://api.notion.com/v1/databases/{database_id}/query"
     try:
-        logger.info("truc log " + str(HEADERS))
         response = requests.post(url, headers=HEADERS, json={})
         response.raise_for_status()
         data = response.json()

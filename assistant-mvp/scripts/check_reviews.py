@@ -24,7 +24,7 @@ def get_posts_ready_for_review():
     payload = {
         "filter": {
             "property": "Status",
-            "status": {"equals": "Ready for Review"}
+            "status": {"equals": "Draft"}
         }
     }
 

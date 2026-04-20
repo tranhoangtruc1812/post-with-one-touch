@@ -14,7 +14,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # Giữ track các post đã gửi chờ duyệt để tránh gửi lặp lại
 pending_reviews = set()
 
-async def send_post_for_review(context: ContextTypes.DEFAULT_TYPE, post_id: str, topic: str, content: str, image_url: str):
+async def send_post_for_review(context: ContextTypes.DEFAULT_TYPE, post_id: str, topic: str, content: str, image_url: str, scheduled_date: str = "Chưa hẹn giờ"):
     """
     Gửi tin nhắn chứa nội dung bài đăng tới User qua Telegram, kèm nút Approve / Reject
     """
@@ -27,7 +27,8 @@ async def send_post_for_review(context: ContextTypes.DEFAULT_TYPE, post_id: str,
         return
 
     message_text = f"📝 *BÀI ĐĂNG CẦN PHÊ DUYỆT*\n\n"
-    message_text += f"📌 *Chủ đề:* {topic}\n\n"
+    message_text += f"📌 *Chủ đề:* {topic}\n"
+    message_text += f"⏰ *Lịch đăng:* {scheduled_date}\n\n"
     message_text += f"{content[:800]}" # Giới hạn độ dài để đọc dễ
     if len(content) > 800:
         message_text += "...\n*(Nội dung đã được cắt bớt)*"
@@ -58,6 +59,10 @@ async def send_post_for_review(context: ContextTypes.DEFAULT_TYPE, post_id: str,
             )
         pending_reviews.add(post_id)
         logger.info(f"Đã gửi bài {post_id} qua Telegram để chờ duyệt")
+        
+        # Cập nhật trạng thái Notion -> Ready for Review
+        update_post_status(post_id, "Ready for Review")
+        logger.info(f"Đã cập nhật Notion post {post_id} thành 'Ready for Review'.")
     except Exception as e:
         logger.error(f"Lỗi khi gửi tin báo Telegram cho post {post_id}: {e}")
 
@@ -128,4 +133,15 @@ async def check_reviews_job(context: ContextTypes.DEFAULT_TYPE):
         
         image_url = props.get("Image_URL", {}).get("url", "")
         
-        await send_post_for_review(context, post_id, topic, content, image_url)
+        scheduled_date_str = "Chưa hẹn giờ"
+        if "Scheduled Date" in props and props["Scheduled Date"]["type"] == "date" and props["Scheduled Date"]["date"]:
+            raw_date = props["Scheduled Date"]["date"]["start"]
+            try:
+                import datetime
+                dt = datetime.datetime.fromisoformat(raw_date.replace('Z', '+00:00'))
+                # Hiển thị lại với format ngày giờ cho thân thiện, ví dụ: 2026-04-19 10:00
+                scheduled_date_str = dt.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                scheduled_date_str = raw_date
+        
+        await send_post_for_review(context, post_id, topic, content, image_url, scheduled_date_str)

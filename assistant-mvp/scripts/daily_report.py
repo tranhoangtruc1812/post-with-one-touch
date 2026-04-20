@@ -23,10 +23,9 @@ def run_report_agent():
     }
     
     posts_db = os.getenv("NOTION_POSTS_DB_ID")
-    orders_db = os.getenv("NOTION_ORDERS_DB_ID")
     
-    if not posts_db or not orders_db:
-        logger.error("Missing Notion DB env variables.")
+    if not posts_db:
+        logger.error("Missing NOTION_POSTS_DB_ID env variable.")
         return
         
     try:
@@ -36,18 +35,65 @@ def run_report_agent():
         res_posts = requests.post(f"https://api.notion.com/v1/databases/{posts_db}/query", headers=headers, json={})
         posts = res_posts.json().get('results', [])
         
-        res_orders = requests.post(f"https://api.notion.com/v1/databases/{orders_db}/query", headers=headers, json={})
-        orders = res_orders.json().get('results', [])
+        drafts = 0
+        published = 0
+        channels_count = {}
+        failed_posts = []
+        now = datetime.datetime.now(datetime.timezone.utc)
         
-        drafts = len([p for p in posts if p.get("properties", {}).get("Status", {}).get("select", {}).get("name") == "Draft"])
-        published = len([p for p in posts if p.get("properties", {}).get("Status", {}).get("select", {}).get("name") == "Published"])
-        total_orders = len(orders)
+        for p in posts:
+            props = p.get("properties", {})
+            status = props.get("Status", {}).get("status", {}).get("name") or props.get("Status", {}).get("select", {}).get("name") or "Unknown"
+            
+            if status == "Draft":
+                drafts += 1
+            elif status == "Published":
+                published += 1
+                
+            channel = props.get("Channel", {}).get("select", {}).get("name") or "Unknown Channel"
+            channels_count[channel] = channels_count.get(channel, 0) + 1
+            
+            if status == "Approved" and "Scheduled Date" in props and props["Scheduled Date"]["type"] == "date" and props["Scheduled Date"]["date"]:
+                scheduled_date_str = props["Scheduled Date"]["date"]["start"]
+                try:
+                    scheduled_time = datetime.datetime.fromisoformat(scheduled_date_str.replace('Z', '+00:00'))
+                    if scheduled_time < now:
+                        topic_raw = props.get("Topic", {}).get("rich_text", [])
+                        topic = "".join([t["plain_text"] for t in topic_raw]) if topic_raw else "Không có chủ đề"
+                        time_only = scheduled_date_str.split("T")[1][:5] if "T" in scheduled_date_str else scheduled_date_str
+                        failed_posts.append(f"⚠️ {time_only} | Chủ đề: {topic}")
+                except Exception:
+                    pass
+                    
+        failed_posts_str = "\n".join(failed_posts) if failed_posts else "✅ Không có bài nào bị lỗi."
+        channel_stats_str = "\n".join([f"  + Kênh {ch}: {cnt} bài" for ch, cnt in channels_count.items()])
+        
+        # Lọc các bài đăng có lịch trong ngày hôm nay
+        today_date_str = datetime.datetime.now().astimezone().strftime('%Y-%m-%d')
+        today_scheduled_posts = []
+        for p in posts:
+            props = p.get("properties", {})
+            if "Scheduled Date" in props and props["Scheduled Date"]["type"] == "date" and props["Scheduled Date"]["date"]:
+                scheduled_date_full = props["Scheduled Date"]["date"]["start"]
+                if scheduled_date_full.startswith(today_date_str):
+                    topic_raw = props.get("Topic", {}).get("rich_text", [])
+                    topic = "".join([t["plain_text"] for t in topic_raw]) if topic_raw else "Không có chủ đề"
+                    status = props.get("Status", {}).get("status", {}).get("name") or props.get("Status", {}).get("select", {}).get("name") or "Unknown"
+                    time_only = scheduled_date_full.split("T")[1][:5] if "T" in scheduled_date_full else "Tự do"
+                    today_scheduled_posts.append(f"⏰ *{time_only}* | Trạng thái: {status}\n📌 Chủ đề: {topic}")
+        
+        if not today_scheduled_posts:
+            scheduled_posts_table = "Không có bài viết nào được lên lịch cho hôm nay."
+        else:
+            scheduled_posts_table = "\n\n".join(today_scheduled_posts)
         
         # Tạo prompt
         prompt = load_prompt_template().format(
             draft_count=drafts,
             published_count=published,
-            order_count=total_orders
+            scheduled_posts_table=scheduled_posts_table,
+            channel_stats=channel_stats_str,
+            failed_posts=failed_posts_str
         )
         
         # Call model. (Báo cáo cần Text, không force JSON)
@@ -63,6 +109,23 @@ def run_report_agent():
         logger.info("\n==============================\n")
         logger.info(f"BÁO CÁO CUỐI NGÀY:\n{report_text}\n")
         logger.info("==============================\n")
+
+        # Gửi sang Telegram
+        telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        if telegram_token and telegram_chat_id:
+            try:
+                tel_url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+                payload = {
+                    "chat_id": telegram_chat_id,
+                    "text": f"📊 *BÁO CÁO DAILY MỚI NHẤT*\n\n{report_text}",
+                    "parse_mode": "Markdown"
+                }
+                res = requests.post(tel_url, json=payload, timeout=10)
+                res.raise_for_status()
+                logger.info("Đã gửi báo cáo qua Telegram thành công!")
+            except Exception as e:
+                logger.error(f"Lỗi gửi tin nhắn báo cáo qua Telegram: {e}")
 
     except Exception as e:
         logger.error(f"Generate Report Failed: {e}")
